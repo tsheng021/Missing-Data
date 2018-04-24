@@ -1,0 +1,444 @@
+---
+title: 'Decay model to estimate treatment effect based on AUC (2 time points version) '
+output:
+  html_notebook: default
+  html_document: default
+  bibliography: Mendeley.bib
+  pdf_document:
+    fig_caption: yes
+    keep_tex: yes
+---
+
+# Introduction
+This notebook is dedicated to investigate the implementation of 'Decay Model' based on [@White1999] thru a simulated example dataset. Previous part of the paper focuses more on the 'De Facto' estimand at the last time point. This is due to the fact that in a certain clinical trials, patients might switch between arms, to a non-trial treatment or no treatment. 'De Facto' estimand targets the overall policy effect at the last time point. However, a lot of times the effect of the trial treatment is of interest. That is the 'De Jure' estimand which targets the question 'What would the effect be if patients continue on treatment'. In order to assess the trial treatment effect without breaking the randomization in a survival analysis study, White et al. (1999) developed a model that 'correct for treatment changes during follow-up, yet are based on comparisons of randomized groups' [@White1999]. In the following part of the paper, an extension of the method to continuous end point using 'Area under the curve (AUC)' is introduced. The idea follows White's paper. Since patients are randomly assigned to two arms, they should have same AUC if given the same treatment. Suppose a counter-factual treatment free AUC can be achieved based on the observed AUC under treatment, then this AUC should be no different from the observed placebo group AUC. 
+
+# Simulated data overview
+
+## Setup
+
+Consider a sample dataset simulated as follow,
+* Number of patients $N=100$ for each arm.
+* Total 3 measurement points, $t_0$ (baseline) and $t_1, t_2$ 
+* Suppose baseline effects are the same $t_0 = 6$
+* Placebo group change from baseline mean: (0, 1.0, 4)
+* Treatment group change from baseline mean: (0, 1.0, 4)  
+* Standard deviations identical among two groups: (2.0, 1.8, 2.2)
+* Correlation matrix  $$ \left[\begin{array} {rrr}
+	  1 & 0.6 & 0.1 \\
+    0.6 & 1 & 0.2 \\
+    0.1 & 0.2 & 1 \\
+	\end{array}\right] $$$$
+* Assume no missing data in either arm. The probability of treatment arm switch to placebo arm at time point $j$ is 
+	  $$logit(P(switch)) = 2.8 + (-0.4)*y_{j-1} $$
+	  or
+	  $$ logit(P(switch)) = 1.6 + (-0.4)*y_j$$
+
+
+## Simulated data overview
+```{r results='hide', message=FALSE, warning=FALSE}
+library(parallel)
+library(MASS)
+library(reshape2)
+library(plyr)
+
+seed <- 1234
+set.seed(seed)
+N <- 100
+t <- 5
+mu_pj <- c(0, 1.0, 4)+6
+mu_dj <- c(0, 1.0, 4)+6
+sd <- c(2.0, 1.8, 2.2)
+corr <- matrix(c(1.0, 0.6, 0.1,
+                 0.6, 1.0, 0.2,
+                 0.1, 0.2, 1.0), nrow=3)
+vv <- diag(sd) %*% corr %*% diag(sd)
+
+psi_cd <- c(2.8, -0.4, 0)
+
+y_p <- mvrnorm(N, mu_pj, vv)
+y_d <- mvrnorm(N, mu_dj, vv)
+
+px <- as.matrix(cbind(1,y_d[,2:3])) %*% t(t(psi_cd))
+pt <- 1/(1+exp(-px))
+ind <- rbinom(N, 1, pt)+1
+ind_df <- which(ind==2)
+
+trt_df <- data.frame(y_d)
+colnames(trt_df) <- c('bl','t1', 't2')
+
+trt_df$t2[ind_df] <- rnorm(length(ind_df), 
+                           mean = mu_pj[3] + vv[3,1:2]%*%solve(vv[1:2,1:2])%*%t(sweep(trt_df[ind_df,1:2], 2, mu_dj[1:2])),
+                           sd = sqrt(vv[3,3]-vv[3,1:2]%*%solve(vv[1:2,1:2])%*%vv[1:2,3]))
+pla_df <- y_p
+```
+
+```{r}
+Time <- 0:2
+pla_obs <- colMeans(y_p)
+trt_obs <- colMeans(y_d)
+trt_switch2 <- colMeans(trt_df[ind_df,1:2])
+
+# plot group means
+plot(trt_obs~Time, type='l', col='blue', 
+     xlab='Time', ylab='Response', main='Mean Response', ylim=c(0,12))
+points(trt_obs~Time, col='blue')
+lines(trt_switch2~Time[1:2], col='blue')
+points(trt_switch2~Time[1:2], col='blue', pch=19)
+
+lines(pla_obs~Time, col='red')
+points(pla_obs~Time, col='red')
+
+legend("bottomright",
+       legend=c('Placebo mean', "Treatment mixed mean", "Treatment switch mean"),
+       lty=c(1, 1, 1), pch=c(1, 1, 19), col=c("red", "blue", "blue"))
+
+# mean_table <- rbind(c(pla_obs,1),
+#                     c(trt_obs,1),
+#                     c(trt_switch2, NA, mean(ind==2))
+# )
+# round(mean_table,2)
+```
+
+The treatment mean is very close to placebo mean at each time point because the 'true' underline simulation is under null. The lines with solid points represent the means for those patients who switched to placebo. The fact that those treatment patients who switched to placebo before the end of study at Time 4 have a lower than average measurement mean indicates that when treatment effect is not as expected, patients whould choose to discontinue from the tretment arm. Consider a specific patient, patient #10, who switched to placebo at time point $t_3$. The patients measurements at each time point are plotted as follow. This patient has a better than average score at baseline but show no response to drug during the treatment period. The patient dropped from treatment and switched to placebo at time pont $t_3$. Is is a typical example of dropout due to lack of efficacy. To implement the 'decay model' based on the 'area under the curve (AUC)' value, the following steps are performed.
+
+```{r}
+# plot group means
+plot(trt_obs~Time, type='l', col='blue', 
+     xlab='Time', ylab='Response', main='Patient 4 measurement', ylim=c(0,12))
+points(trt_obs~Time, col='blue')
+lines(pla_obs~Time, col='red')
+points(pla_obs~Time, col='red')
+
+# plot single patient with switch
+I <- 4
+lines (as.numeric(trt_df[I, 2:3])~Time[2:3], lty=2, col='red')
+points (as.numeric(trt_df[I, 2:3])~Time[2:3], pch=17, col='red')
+lines (as.numeric(trt_df[I, 1:2])~Time[1:2], lty=1, col='blue')
+points (as.numeric(trt_df[I, 1:2])~Time[1:2], pch=17, col='blue')
+
+
+legend("bottomright",
+       legend=c('Placebo mean', "Treatment mixed mean",  "Patient 4 On Treatment", "Patient 4 On Placebo"),
+       lty=c(1, 1, NA, NA), pch=c(1, 1, 17, 17), col=c("red", "blue", "blue", "red"))
+```
+
+The blue shaded area is the AUC on treatment arm, denoted as $AUC_{4}^{trt}$ and the red shaded area is the AUC on placebo arm, denoted as $AUC_{4}^{pla}$. The on-treatment measurements are denoted as $y_{4,0}, y_{4,1}$ and $y_{4,2}$. The on-placebo measurements are denoted as $z_{4,3}, z_{4,4}$
+
+$$ AUC_{4}^{trt} = \frac{y_{4,0} + y_{4,1}}{2}  $$
+$$ AUC_{4}^{pla} = \frac{y_{4,2} + z_{4,3}}{2} $$
+```{r}
+
+# plot single patient with switch
+I <- 4
+plot (as.numeric(trt_df[I, 1:2])~Time[1:2], type='l', col='blue',
+      xlab='Time', ylab='Response', main='Patient 4 AUC', ylim=c(0,12), xlim=c(0,2))
+points (as.numeric(trt_df[I, 1:2])~Time[1:2], pch=17, col='blue')
+lines (as.numeric(trt_df[I, 2:3])~Time[2:3], lty=2, col='red')
+points (as.numeric(trt_df[I, 2:3])~Time[2:3], pch=17, col='red')
+
+# plot AUC
+polygon(c(0:1,1,0),c(trt_df[I,1:2],0,0), density = 5, angle = 90,col="blue")
+polygon(c(1:2,2,1),c(trt_df[I,2:3],0,0), density = 5, angle = 45,col="red")
+legend("topleft",
+       legend=c( "On Treatment", "On Placebo"),
+       pch=c(17, 17), col=c("blue", "red"))
+```
+
+
+The 'decay model' is to construct a counter-factual treatment-free AUC, denoted as $U_{10}$ by adjusting the on-treatment AUC by rate of $e^{\phi}$. 
+\begin{equation}
+\begin{split}
+U_{4} &= AUC_{4}^{trt}\times e^{\phi} + AUC_{4}^{pla}\\
+       &= \Big\{ \frac{y_{4,0} + y_{4,1}}{2} \Big\}\times e^{\phi} + \frac{y_{4,1} + z_{4,2}}{2}
+\end{split}
+\end{equation}
+
+Perform the same process for all treatment patients and construct $U_1,...,U_{100}$ counter-factual treatment-free AUCs. The summary of the 100 original AUCs are as follow
+```{r}
+pla_df2 <- data.frame(ID=1:N, pla_df)
+trt_df2 <- data.frame(ID=1:N+N, trt_df)
+pla_df_long <- melt(pla_df2, id='ID')
+pla_df_long$variable <- as.numeric(pla_df_long$variable)-1
+trt_df_long <- melt(trt_df2, id= 'ID')
+trt_df_long$variable <- as.numeric(trt_df_long$variable)-1
+auc_pla <- 
+
+par(mfrow=c(1,2))
+interaction.plot(as.numeric(pla_df_long$variable), 
+                 pla_df_long$ID, 
+                 pla_df_long$value,
+                 xlab='time', ylab='placebo response', ylim = c(0, 16), legend=F)
+lines(pla_obs~c(0:2),col='red')
+interaction.plot(as.numeric(trt_df_long$variable), 
+                 trt_df_long$ID, 
+                 trt_df_long$value,
+                 xlab='time', ylab='treatment response', ylim = c(0, 16),  legend=F)
+lines(trt_obs~c(1:3),col='red')
+```
+
+
+The idea of the 'decay method' is to find a $\hat{\phi}$ such that the $U_i$'s are least significant comparing to $AUC_i^{pla}$. Suppose an ANOVA F-test is used to compare the means of two sample AUCs, a grid search of -0.15 to 0.15 in steps of 0.001 is performed to find the estimator $\hat{\phi}$ where test statistic after rounding to four decimal points was smallest.
+
+```{r}
+range <- -120:120
+stat_aov <- pval_aov <- rep(NA, length(range))
+for (k in 1:length(range)){
+  phi <- range[k]/1000;
+  
+  auc_d1 <- auc_d2 <- auc_p1 <- auc_p2 <- c()
+  auc_d1 <- (trt_df[,1]+trt_df[,2])/2*exp(phi)
+  auc_d2 <- (trt_df[,2]+trt_df[,3])/2*exp((2-ind)*phi)
+  auc_p1 <- (pla_df[,1]+pla_df[,2])/2
+  auc_p2 <- (pla_df[,2]+pla_df[,3])/2
+
+  
+  aucd <- auc_d1 + auc_d2
+  aucp <- auc_p1 + auc_p2
+  
+  dat <- rbind(data.frame(val=aucd, arm='trt'), data.frame(val=aucp, arm='pla'))
+  result_aov <- summary(aov(val~arm, data=dat))
+  stat_aov[k] <- round(result_aov[[1]][["F value"]][1], 4)
+  pval_aov[k] <- round(result_aov[[1]][["Pr(>F)"]][1], 4)
+}
+
+
+
+## PLOT ANOVA ##
+phi <- range/1000;
+plot(phi, pval_aov, type="l", col="red", ylab='p value', 
+     xlab=expression(hat(phi)), main='ANOVA F-test')
+abline(h=0.05, lty=2, col='red')             
+par(new = T)
+plot(stat_aov~phi, axes=F, xlab=NA, ylab=NA, type='l')
+axis(side = 4)
+mtext(side = 4, line = 3, 'Test Statistic')
+legend("topright",
+       legend=c('p-value', "F statistic"),
+       lty=1, col=c("red", "black"))
+phi_hat <- phi[which.max(pval_aov)]
+abline(v=phi_hat, lty=2)
+abline(h=qf(1-0.05, 1, 998), lty=2)
+phi_low <- phi[which(phi<phi_hat)][which.min(abs(pval_aov[which(phi<phi_hat)]-0.05))]
+phi_upp <- phi[which(phi>phi_hat)][which.min(abs(pval_aov[which(phi>phi_hat)]-0.05))]
+points(c(phi_hat, phi_low, phi_upp), c(max(stat_aov), qf(1-0.05, 1, 998), qf(1-0.05, 1, 998)))
+text(phi_hat+0.01, max(stat_aov)-.5, labels=expression(paste(hat(phi),'=0.028')), cex= 0.7, pos=3)
+text(phi_low-0.01, min(stat_aov)+2.5, labels=expression(paste(hat(phi),'=-0.047')), cex= 0.7, pos=3)
+text(phi_upp+0.01, min(stat_aov)+2.5, labels=expression(paste(hat(phi),'=0.107')), cex= 0.7, pos=3)
+
+```
+The red curve represents the p value of the test. The p value reaches the maximum at $\hat{\phi}=-0.028$. The interpretation is that the treatment and placebo arms difference is least significant when the AUC during treatment period is $e^{-0.028}$ times AUC if no treatment taken. The 95\% confidence interval is calculated as the interval such that the corresponding p value is greater than 0.05 (equivalently, $\hat{\phi}$ corresponding to $F_{0.025}$  which is [-0.094, 0.041]). Note that the confidence interval covers 0 which means the treatment effect is not significant.
+
+Base on the estimated $\hat{\phi}$, the adjusted AUC is as follow. 
+```{r}
+auc_d <- auc_p <- auc_upp <- auc_low <- auc_org <- c()
+
+auc_org1 <- (trt_df[,1]+trt_df[,2])/2
+auc_org2 <- (trt_df[,2]+trt_df[,3])/2
+auc_org <- cbind(auc_org1, auc_org2)
+
+auc_p1 <- (pla_df[,1]+pla_df[,2])/2
+auc_p2 <- (pla_df[,2]+pla_df[,3])/2
+auc_p <- cbind(auc_p1, auc_p2)
+
+auc_d1 <- (trt_df[,1]+trt_df[,2])/2*exp(phi_hat)
+auc_d2 <- (trt_df[,2]+trt_df[,3])/2*exp((ind-1)*phi_hat)
+auc_d <- cbind(auc_d1, auc_d2)
+
+auc_upp1 <- (trt_df[,1]+trt_df[,2])/2*exp(phi_upp)
+auc_upp2 <- (trt_df[,2]+trt_df[,3])/2*exp((ind-1)*phi_upp)
+auc_upp <- cbind(auc_upp1, auc_upp2)
+
+auc_low1 <- (trt_df[,1]+trt_df[,2])/2*exp(phi_low)
+auc_low2 <- (trt_df[,2]+trt_df[,3])/2*exp((ind-1)*phi_low)
+auc_low <- cbind(auc_low1, auc_low2)
+
+
+time <- 1:2
+
+plot(colMeans(auc_p)~time, ylab='AUC', type='l', xlab='Time',col='red')
+lines(colMeans(auc_d)~time)
+lines(colMeans(auc_org)~time, col='blue')
+lines(colMeans(auc_upp)~time, lty=2)
+lines(colMeans(auc_low)~time, lty=2)
+
+legend("topleft",
+       legend=c('Placebo', 'Adjusted Treatment','Original'),
+       lty=1, col=c("red", "black", 'blue'))
+
+```
+
+The adjusted treatment-free AUC curve (black solid curve) almost totally covers the placebo AUC curve (red solid curve) which indicates the $\hat{\phi}$ is estimated correctly. The original AUC curve (blue curve) is covered in the 95\%CI (black dotted curve) which indicates that the treatment effect is not significant.
+
+# Hypothesis testing
+Consider the hypothesis testing using the 'decay method'. If the rejecting rule is based on whether the 95\% grid-searched interval covers the 0 point,  the previous plot indicates that the aforementioned rule is numercially equivalent to rejecting based on whether the test between original AUC's are significant. To be more specific, when conducting the hypothesis testing based on the grid search effect from the 'decay method' approach, the 95\% interval is determined as 'the set of $\hat{\phi}$ such that the corresponding test p value's are greater than 0.05'. If $\hat{\phi}=0$ is not in this set, the null hypothesis is rejected. Note that $\hat{\phi}=0$ not in the set is equivalent to the test p value corresponding to $\hat{\phi}=0$ is less than 0.05. Since $\hat{\phi}=0$ indicates the AUC without adjusting, the test based on the 'decay model' grid search result is therefore equivalent to the unadjusted two sample AUC test. In order to further investigate the performace of 'Decay method' as a method of hypothesis testing, two scenarios are considered. 1) The switch from treatment to placebo depends on the unobserved on-treamtent measurement (switch not at random).$logit(P(switch)) = 2.8 - 0.4 y_j$.  2) The switch from treatment to placebo does not depend on the last observed or unobserved on-treatment measurements  (switch completely at random), $logit(P(switch)) = -1$. 
+
+## Switch at random
+
+
+```{r,results = "hide"}
+S <- 5000
+no_cores <- detectCores()-1
+cl <- makeCluster(no_cores)
+clusterExport(cl,varlist=c('S', 'N', 't', 'seed',
+                           'mu_pj', 'mu_dj', 'vv',
+                           'psi_cd'
+))
+clusterEvalQ(cl, {
+  library(MASS)
+})
+clusterSetRNGStream(cl, seed)
+
+summary <- t(parSapply(cl, 1:S,  function(x){
+  out <- c()
+  y_p <- mvrnorm(N, mu_pj, vv)
+  y_d <- mvrnorm(N, mu_dj, vv)
+
+  px <- as.matrix(cbind(1,y_d[,2:3])) %*% t(t(psi_cd))
+  pt <- 1/(1+exp(-px))
+  ind <- rbinom(N, 1, pt)+1
+  ind_df <- which(ind==2)
+
+  trt_df <- data.frame(y_d)
+  colnames(trt_df) <- c('bl','t1', 't2')
+
+  trt_df$t2[ind_df] <- rnorm(length(ind_df), 
+                           mean = mu_pj[3] + vv[3,1:2]%*%solve(vv[1:2,1:2])%*%t(sweep(trt_df[ind_df,2:3], 2, mu_dj[2:3])),
+                           sd = sqrt(vv[3,3]-vv[3,1:2]%*%solve(vv[1:2,1:2])%*%vv[1:2,3]))
+  pla_df <- y_p
+
+  auc_d1 <- (trt_df[,1]+trt_df[,2])/2
+  auc_d2 <- (trt_df[,2]+trt_df[,3])/2
+  aucd <- auc_d1 + auc_d2
+
+  auc_p1 <- (pla_df[,1]+pla_df[,2])/2
+  auc_p2 <- (pla_df[,2]+pla_df[,3])/2
+  aucp <- auc_p1 + auc_p2
+  
+  r <- t.test(aucd, aucp)
+  out <- c(out, (r$p.value<.05), r$conf.int[1:2])
+  
+  range <- -300:300
+  stat_aov <- pval_aov <- rep(NA, length(range))
+  for (k in 1:length(range)){
+    phi <- range[k]/1000;
+  
+    auc_d1 <- (trt_df[,1]+trt_df[,2])/2*exp(phi)
+    auc_d2 <- (trt_df[,2]+trt_df[,3])/2*exp((ind-1)*phi)
+    auc_p1 <- (pla_df[,1]+pla_df[,2])/2
+    auc_p2 <- (pla_df[,2]+pla_df[,3])/2
+
+  
+    aucd <- auc_d1 + auc_d2
+    aucp <- auc_p1 + auc_p2
+  
+    dat <- rbind(data.frame(val=aucd, arm='trt'), data.frame(val=aucp, arm='pla'))
+    result_aov <- summary(aov(val~arm, data=dat))
+    stat_aov[k] <- round(result_aov[[1]][["F value"]][1], 4)
+    pval_aov[k] <- round(result_aov[[1]][["Pr(>F)"]][1], 4)
+  }
+  phi <- range/1000
+  phi_hat <- phi[which.max(pval_aov)]
+  phi_low <- phi[which(phi<=phi_hat)][which.min(abs(pval_aov[which(phi<=phi_hat)]-0.05))]
+  phi_upp <- phi[which(phi>=phi_hat)][which.min(abs(pval_aov[which(phi>=phi_hat)]-0.05))]
+  out <- c(out, phi_hat, phi_low, phi_upp)
+  out
+}))
+
+stopCluster(cl)
+```
+
+```{r}
+summary <- data.frame(summary)
+colnames(summary) <- c('pval', 'lower', 'upper', 'dcy', 'dcy_low', 'dcy_upp')
+summary$cover <- (summary$lower<0 & summary$upper>0)
+summary$dcy_cover <- (summary$dcy_low<0 & summary$dcy_upp>0)
+colMeans(summary)
+```
+
+## Switch completely at random
+```{r results = "hide"}
+psi_cd <- c(-1, 0, 0)
+summary <- c()
+out <- c()
+S <- 1000
+no_cores <- detectCores()-1
+cl <- makeCluster(no_cores)
+clusterExport(cl,varlist=c('S', 'N', 't', 'seed',
+                           'mu_pj', 'mu_dj', 'vv',
+                           'psi_cd'
+))
+clusterEvalQ(cl, {
+  library(MASS)
+})
+clusterSetRNGStream(cl, seed)
+
+summary <- t(parSapply(cl, 1:S,  function(x){
+  out <- c()
+  y_p <- mvrnorm(N, mu_pj, vv)
+  y_d <- mvrnorm(N, mu_dj, vv)
+
+  px <- as.matrix(cbind(1,y_d[,2:3])) %*% t(t(psi_cd))
+  pt <- 1/(1+exp(-px))
+  ind <- rbinom(N, 1, pt)+1
+  ind_df <- which(ind==2)
+
+  trt_df <- data.frame(y_d)
+  colnames(trt_df) <- c('bl','t1', 't2')
+
+  trt_df$t2[ind_df] <- rnorm(length(ind_df), 
+                           mean = mu_pj[3] + vv[3,1:2]%*%solve(vv[1:2,1:2])%*%t(sweep(trt_df[ind_df,2:3], 2, mu_dj[2:3])),
+                           sd = sqrt(vv[3,3]-vv[3,1:2]%*%solve(vv[1:2,1:2])%*%vv[1:2,3]))
+  pla_df <- y_p
+
+  auc_d1 <- (trt_df[,1]+trt_df[,2])/2
+  auc_d2 <- (trt_df[,2]+trt_df[,3])/2
+  aucd <- auc_d1 + auc_d2
+
+  auc_p1 <- (pla_df[,1]+pla_df[,2])/2
+  auc_p2 <- (pla_df[,2]+pla_df[,3])/2
+  aucp <- auc_p1 + auc_p2
+  
+
+  
+  r <- t.test(aucd, aucp)
+  out <- c(out, (r$p.value<.05), r$conf.int[1:2])
+  
+  range <- -300:300
+  stat_aov <- pval_aov <- rep(NA, length(range))
+  for (k in 1:length(range)){
+    phi <- range[k]/1000;
+  
+    auc_d1 <- (trt_df[,1]+trt_df[,2])/2*exp(phi)
+    auc_d2 <- (trt_df[,2]+trt_df[,3])/2*exp((ind-1)*phi)
+    auc_p1 <- (pla_df[,1]+pla_df[,2])/2
+    auc_p2 <- (pla_df[,2]+pla_df[,3])/2
+
+  
+    aucd <- auc_d1 + auc_d2
+    aucp <- auc_p1 + auc_p2
+  
+    dat <- rbind(data.frame(val=aucd, arm='trt'), data.frame(val=aucp, arm='pla'))
+    result_aov <- summary(aov(val~arm, data=dat))
+    stat_aov[k] <- round(result_aov[[1]][["F value"]][1], 4)
+    pval_aov[k] <- round(result_aov[[1]][["Pr(>F)"]][1], 4)
+  }
+  phi <- range/1000
+  phi_hat <- phi[which.max(pval_aov)]
+  phi_low <- phi[which(phi<=phi_hat)][which.min(abs(pval_aov[which(phi<=phi_hat)]-0.05))]
+  phi_upp <- phi[which(phi>=phi_hat)][which.min(abs(pval_aov[which(phi>=phi_hat)]-0.05))]
+  out <- c(out, phi_hat, phi_low, phi_upp)
+  out
+}))
+
+stopCluster(cl)
+```
+
+```{r}
+summary <- data.frame(summary)
+colnames(summary) <- c('pval', 'lower', 'upper', 'dcy', 'dcy_low', 'dcy_upp')
+summary$cover <- (summary$lower<0 & summary$upper>0)
+summary$dcy_cover <- (summary$dcy_low<0 & summary$dcy_upp>0)
+colMeans(summary)
+```
+
+
