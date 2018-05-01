@@ -24,10 +24,10 @@ alpha <- .05
 # S1
 psi1 <- c(.4, -.4, 0)
 psi2 <- c(-.3, -.4, 0)
-psi1p <- c(-.4, .4, 0)
-psi2p <- c(-1.6, .4, 0)
+psi1p <- c(.4, -.4, 0)
+psi2p <- c(-.3, -.4, 0)
 
-S <- 1000
+S <- 100
 
 df <- pval <-
   switch_trt <- miss_trt <-
@@ -51,9 +51,10 @@ for(i in 1:S){
     while (sum(ind[cand]==2)==0) ind[cand] <- rbinom(length(cand), 1, pt) + ind[cand]
     ind_df <- which(ind[cand]==2)
     e[cand][ind_df] <- j
-    y[cand,][ind_df, mis+1] <- rnorm(length(ind_df),
-                               mean=mu_df[mis]+vv[mis,obs]%*%solve(vv[obs,obs])%*%t(sweep(y[cand,][ind_df,obs+1], 2, mu_dj[obs+1])),
-                               sd=sqrt(vv[mis,mis]-vv[mis,obs]%*%solve(vv[obs,obs])%*%vv[obs,mis]))
+    Temp <- t(apply(mu_df[mis]+vv[mis,obs]%*%solve(vv[obs,obs])%*%t(sweep(y[cand,][ind_df,obs+1], 2, mu_dj[obs])),
+                    2, function(x) mvrnorm(1, x, Sigma=vv[mis,mis]-vv[mis,obs]%*%solve(vv[obs,obs])%*%vv[obs,mis])))
+    if (j==4) Temp <- t(Temp)
+    y[cand,][ind_df, mis+1] <- Temp
     
     px <- as.matrix(cbind(1,y[cand,][ind_df,(j+1):(j+2)])) %*% t(t(psi2))
     pt <- 1/(1+exp(-px))
@@ -82,9 +83,10 @@ for(i in 1:S){
     while (sum(indp[cand]==2)==0) indp[cand] <- rbinom(length(cand), 1, pt) + indp[cand]
     ind_df <- which(indp[cand]==2)
     ep[cand][ind_df] <- j
-    z[cand,][ind_df, mis+1] <- rnorm(length(ind_df),
-                                     mean=mu_pf[mis]+vv[mis,obs]%*%solve(vv[obs,obs])%*%t(sweep(z[cand,][ind_df,obs+1], 2, mu_pj[obs+1])),
-                                     sd=sqrt(vv[mis,mis]-vv[mis,obs]%*%solve(vv[obs,obs])%*%vv[obs,mis]))
+    Temp <- t(apply(mu_pf[mis]+vv[mis,obs]%*%solve(vv[obs,obs])%*%t(sweep(z[cand,][ind_df,obs+1], 2, mu_pj[obs])),
+                    2, function(x) mvrnorm(1, x, Sigma=vv[mis,mis]-vv[mis,obs]%*%solve(vv[obs,obs])%*%vv[obs,mis])))
+    if (j==4) Temp <- t(Temp)
+    z[cand,][ind_df, mis+1] <- Temp
     
     px <- as.matrix(cbind(1,z[cand,][ind_df,(j+1):(j+2)])) %*% t(t(psi2p))
     pt <- 1/(1+exp(-px))
@@ -100,7 +102,7 @@ for(i in 1:S){
   tot_f$e <- c(e, ep)
   tot_long <- melt(tot_f,id.var=c('id','t0','g','s','e'))
   colnames(tot_long) <- c('id', 'bl', 'g', 's', 'e','time', 'val')
-
+  
   
   # Create coding variable
   tot_long$s1g1 <- 0
@@ -111,91 +113,91 @@ for(i in 1:S){
   
   tot_long$s23g1 <- 0
   tot_long$s23g1[which(tot_long$s>1 & tot_long$g==1)] <- 1
-
-  tot_long$j2s23e2g0 <- 0
-  tot_long$j2s23e2g0[which(tot_long$s>1 & 
-                          tot_long$g==0 & 
-                          tot_long$e==2 &
-                          tot_long$time=='t2')] <- 1
   
-  tot_long$j2s1g1 <- 0
-  tot_long$j2s1g1[which(tot_long$s==1 & 
-                             tot_long$g==1 & 
+  tot_long$j2s23e2g0 <- 0
+  tot_long$j2s23e2g0[which(tot_long$s>1 &
+                             tot_long$g==0 &
+                             tot_long$e==2 &
                              tot_long$time=='t2')] <- 1
   
+  tot_long$j2s1g1 <- 0
+  tot_long$j2s1g1[which(tot_long$s==1 &
+                          tot_long$g==1 &
+                          tot_long$time=='t2')] <- 1
+  
   tot_long$j2s23e2g1 <- 0
-  tot_long$j2s23e2g1[which(tot_long$s>1 & 
-                             tot_long$g==1 & 
+  tot_long$j2s23e2g1[which(tot_long$s>1 &
+                             tot_long$g==1 &
                              tot_long$e==2 &
                              tot_long$time=='t2')] <- 1
   
   tot_long$j3s23e2g0 <- 0
-  tot_long$j3s23e2g0[which(tot_long$s>1 & 
-                             tot_long$g==0 & 
+  tot_long$j3s23e2g0[which(tot_long$s>1 &
+                             tot_long$g==0 &
                              tot_long$e==2 &
                              tot_long$time=='t3')] <- 1
   
   tot_long$j3s23e3g0 <- 0
-  tot_long$j3s23e3g0[which(tot_long$s>1 & 
-                             tot_long$g==0 & 
+  tot_long$j3s23e3g0[which(tot_long$s>1 &
+                             tot_long$g==0 &
                              tot_long$e==3 &
                              tot_long$time=='t3')] <- 1
   
   tot_long$j3s1g1 <- 0
-  tot_long$j3s1g1[which(tot_long$s==1 & 
-                          tot_long$g==1 & 
+  tot_long$j3s1g1[which(tot_long$s==1 &
+                          tot_long$g==1 &
                           tot_long$time=='t3')] <- 1
   
   tot_long$j3s23e2g1 <- 0
-  tot_long$j3s23e2g1[which(tot_long$s>1 & 
-                             tot_long$g==1 & 
+  tot_long$j3s23e2g1[which(tot_long$s>1 &
+                             tot_long$g==1 &
                              tot_long$e==2 &
                              tot_long$time=='t3')] <- 1
   
   tot_long$j3s23e3g1 <- 0
-  tot_long$j3s23e3g1[which(tot_long$s>1 & 
-                             tot_long$g==1 & 
+  tot_long$j3s23e3g1[which(tot_long$s>1 &
+                             tot_long$g==1 &
                              tot_long$e==3 &
                              tot_long$time=='t3')] <- 1
   
   tot_long$j4s23e2g0 <- 0
-  tot_long$j4s23e2g0[which(tot_long$s>1 & 
-                             tot_long$g==0 & 
+  tot_long$j4s23e2g0[which(tot_long$s>1 &
+                             tot_long$g==0 &
                              tot_long$e==2 &
                              tot_long$time=='t4')] <- 1
   
   tot_long$j4s23e3g0 <- 0
-  tot_long$j4s23e3g0[which(tot_long$s>1 & 
-                             tot_long$g==0 & 
+  tot_long$j4s23e3g0[which(tot_long$s>1 &
+                             tot_long$g==0 &
                              tot_long$e==3 &
                              tot_long$time=='t4')] <- 1
   
   tot_long$j4s23e4g0 <- 0
-  tot_long$j4s23e4g0[which(tot_long$s>1 & 
-                             tot_long$g==0 & 
+  tot_long$j4s23e4g0[which(tot_long$s>1 &
+                             tot_long$g==0 &
                              tot_long$e==4 &
                              tot_long$time=='t4')] <- 1
   
   tot_long$j4s1g1 <- 0
-  tot_long$j4s1g1[which(tot_long$s==1 & 
-                          tot_long$g==1 & 
+  tot_long$j4s1g1[which(tot_long$s==1 &
+                          tot_long$g==1 &
                           tot_long$time=='t4')] <- 1
   
   tot_long$j4s23e2g1 <- 0
-  tot_long$j4s23e2g1[which(tot_long$s>1 & 
-                             tot_long$g==1 & 
+  tot_long$j4s23e2g1[which(tot_long$s>1 &
+                             tot_long$g==1 &
                              tot_long$e==2 &
                              tot_long$time=='t4')] <- 1
   
   tot_long$j4s23e3g1 <- 0
-  tot_long$j4s23e3g1[which(tot_long$s>1 & 
-                             tot_long$g==1 & 
+  tot_long$j4s23e3g1[which(tot_long$s>1 &
+                             tot_long$g==1 &
                              tot_long$e==3 &
                              tot_long$time=='t4')] <- 1
   
   tot_long$j4s23e4g1 <- 0
-  tot_long$j4s23e4g1[which(tot_long$s>1 & 
-                             tot_long$g==1 & 
+  tot_long$j4s23e4g1[which(tot_long$s>1 &
+                             tot_long$g==1 &
                              tot_long$e==4 &
                              tot_long$time=='t4')] <- 1
   
@@ -208,28 +210,34 @@ for(i in 1:S){
             method='REML',
             data=tot_long,
             control=lmeControl(returnObject=TRUE))
-  
   m1_coef <- summary(m1)$coef$fixed[c(1,3:23)]
+  
+  
   vv_m1 <- vcov(m1)
   sig_b <- vcov(m1)[c(1,3:5),c(1,3:5)]
   sig_g <- vcov(m1)[6:23,6:23]
   cov_bg <- vcov(m1)[6:23, c(1,3:5)]
-  
-  m2 <- length(which(indp==2 & e==2))
-  m3 <- length(which(indp==2 & e==3))
-  m4 <- length(which(indp==2 & e==4))
-  q2 <- length(which(ind==2 & e==2))
-  q3 <- length(which(ind==2 & e==3))
-  q4 <- length(which(ind==2 & e==4))
-  
-  
+  m2 <- length(which(indp>1 & e==2))
+  m3 <- length(which(indp>1 & e==3))
+  m4 <- length(which(indp>1 & e==4))
+  q2 <- length(which(ind>1 & e==2))
+  q3 <- length(which(ind>1 & e==3))
+  q4 <- length(which(ind>1 & e==4))
   sig_o <- matrix(c(m2*(N-m2)/N^3, -m2*m3/N^3,     -m2*m4/N^3,       0,               0,              0, 
-                   -m2*m3/N^3,      m3*(N-m3)/N^3, -m3*m4/N^3,       0,               0,              0,
-                   -m2*m4/N^3,     -m3*m4/N^3,      m4*(N-m4)/N^3,   0,               0,              0,
+                    -m2*m3/N^3,      m3*(N-m3)/N^3, -m3*m4/N^3,       0,               0,              0,
+                    -m2*m4/N^3,     -m3*m4/N^3,      m4*(N-m4)/N^3,   0,               0,              0,
                     0,              0,              0,               q2*(N-q2)/N^3,  -q2*q3/N^3,     -q2*q4/N^3,
                     0,              0,              0,              -q2*q3/N^3,       q3*(N-q3)/N^3, -q3*q4/N^3,
                     0,              0,              0,              -q2*q4/N^3,      -q3*q4/N^3,      q4*(N-q4)/N^3
-                   ), nrow=6, byrow=T)
+  ), nrow=6, byrow=T)
+  
+  m2 <- length(which(indp>1 & e==2))
+  m3 <- length(which(indp>1 & e==3))
+  m4 <- length(which(indp>1 & e==4))
+  q2 <- length(which(ind>1 & e==2))
+  q3 <- length(which(ind>1 & e==3))
+  q4 <- length(which(ind>1 & e==4))
+  
   
   ws2 <- length(which(indp>1 & ep==2))/N
   ws3 <- length(which(indp>1 & ep==3))/N
@@ -253,7 +261,7 @@ for(i in 1:S){
   U_marg <- matrix(c(1, 0, 0, 0, 0, 0, 0, 0,
                      1, 0, 1, 0, 0, 0, 0, 0,
                      1, 0, 0, 1, 0, 0, 0, 0,
-                     1, 0, 0, 0, 1, 0, 0, 0, 
+                     1, 0, 0, 0, 1, 0, 0, 0,
                      1, 1, 0, 0, 0, 0, 0, 0,
                      1, 1, 1, 0, 0, 1, 0, 0,
                      1, 1, 0, 1, 0, 0, 1, 0,
@@ -276,16 +284,15 @@ for(i in 1:S){
   U_c2 <-  matrix(c(0,    ws, 0,  rep(0, 3), rep(0, 5), rep(0, 7),
                     0,    ws, 0,  u20,       rep(0, 5), rep(0, 7),
                     0,    ws, 0,  rep(0, 3), u30,       rep(0, 7),
-                    0,    ws, 0,  rep(0, 3), rep(0, 5), u40, 
+                    0,    ws, 0,  rep(0, 3), rep(0, 5), u40,
                     po,   0,  ps, rep(0, 3), rep(0, 5), rep(0, 7),
                     po,   0,  ps, u21,       rep(0, 5), rep(0, 7),
                     po,   0,  ps, rep(0, 3), u31,       rep(0, 7),
-                    po,   0,  ps, rep(0, 3), rep(0, 5), u41 
-                    ), nrow=8, byrow=T)
+                    po,   0,  ps, rep(0, 3), rep(0, 5), u41
+  ), nrow=8, byrow=T)
   beta <- matrix(m1_coef[c(1:4)],ncol=1)
   gamma <- matrix(m1_coef[5:22], ncol=1)
   a1 <- solve(t(U_marg)%*%U_marg)%*%t(U_marg)%*%(U_c1%*%beta+U_c2%*%gamma)
-  
   o <- matrix(c(m2, m3, m4, q2, q3, q4),
               ncol=1)
   X <- U_c2%*%gamma%*%t(o)%*%ginv(o%*%t(o))
@@ -298,19 +305,17 @@ for(i in 1:S){
        U_c2%*%cov_bg%*%t(U_c1))%*%
     t(solve(t(U_marg)%*%U_marg)%*%t(U_marg))%*%t(t(c(0,1,0,0,0,0,0,1)))
   
-  
-  
-  df[i] <- a1[2] + a1[4]
+  df[i] <- a1[2] + a1[8]
   pval[i] <- ((1-pt(df[i]/sqrt(v_a1),2*N))<.025)*100
+  
+  
+  
+  
+  
 }
 true_df <- mean(df)
-true_switch_trt <- mean(switch_trt)
-true_miss_trt <- mean(miss_trt)
-true_switch_pla <- mean(switch_pla)
-true_miss_pla <- mean(miss_pla)
+true_pval <- mean(pval)
 true_df
-true_switch_trt
-true_miss_trt
-true_switch_pla
-true_miss_pla
+true_pval
+
 
